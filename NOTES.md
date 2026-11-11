@@ -135,3 +135,19 @@ Cả hai lần chạy đều giữ nguyên cùng cấu hình: `provider = "gemin
    - Tool `get_incident_details` chỉ giữ lại 2 update mới nhất và 1 update đầu tiên, mỗi update cắt ở mức 900 ký tự (`truncated: true`), nên các chi tiết trung gian trong chuỗi sự cố dài có thể bị lược bỏ.
 3. **Giới hạn của việc chỉ chạy một lần mỗi phiên bản (`N = 1`):**
    - Việc sinh phản hồi và gọi tool của LLM có tính ngẫu nhiên (non-deterministic). Chạy mỗi phiên bản một lần (`eval_before.json` và `eval_after.json`) với bộ 22 cases chỉ cung cấp bằng chứng định hướng chứ chưa chứng minh được độ ổn định thống kê qua nhiều lần chạy lặp lại.
+
+
+## 6. Ghi chú phần Thử thách Bonus (`eval_bonus.json`)
+
+- **Kết quả tổng thể (`eval_bonus.json`):**
+  - Chấm đủ **10/10 cases** (`B1`–`B10`), đạt **100.0 / 100 điểm** $\rightarrow$ quy đổi **`bonus_points_0_15 = 15.0 / 15`**.
+  - Tổng số model calls (Agent): **30 calls** (89,586 tokens); Judge: **38,564 tokens**; không có bất kỳ vi phạm cơ học nào (`violations: []` trên cả 10 cases).
+- **Thiết kế xử lý Retry (`B3`, `B4`, `B5`, `B10`):**
+  - Với lỗi `RATE_LIMITED` (HTTP 429): Agent đọc `retry_after_seconds` / `retry_after` (nếu có và nằm trong ngưỡng ngắn $\le 5\text{s}$ thì `time.sleep` tương ứng), đồng thời đếm số lần gọi mỗi status tool trong `tool_call_counts`. Khi gặp `RATE_LIMITED` tạm thời (`B3`, `B10`), agent thử lại ở step 2 và lấy được dữ liệu thành công (tổng 2 lần gọi). Khi gặp `RATE_LIMITED` kéo dài (`B4`), agent dừng đúng ở mốc tối đa **3 lần gọi** `get_vercel_status` và báo cáo partial failure (đầy đủ trạng thái GitHub kèm thông báo không xác định được Vercel do rate limit, không quy kết 429 là outage).
+  - Với lỗi định dạng `INVALID_ARGUMENTS` (`B5`): Khi lần gọi đầu trả về lỗi định dạng giả lập, agent gọi lại `get_incident_details` ở bước 2 với tham số kiểu `int` hợp lệ (`offset=0, limit=2`).
+- **Thiết kế xử lý Pagination & Context (`B2`, `B6`, `B8`):**
+  - **Pagination (`B2`, `B8`):** Trong `B2`, agent gọi `get_incident_details` cho incident `sps6n39gm4sg` của Vercel theo từng trang nối tiếp qua `next_offset`: Step 2 (`offset=0, limit=3`) $\rightarrow$ Step 3 (`offset=3, limit=3`, tìm thấy update lúc `2026-10-12T16:10:42Z` nêu các build kết nối GitHub vẫn lỗi do upstream GitHub) $\rightarrow$ Step 4 (`offset=6, limit=3`, đọc hết 7 updates).
+  - **Lọc nhiễu Context (`B6`):** Khi kết quả status tool chứa danh sách 160 mục `distractors` giả lập, `agent.py` giữ nguyên `tool_res` đầy đủ trong `trace` để phục vụ kiểm tra/audit, nhưng thu gọn trường `distractors` trong bản sao gửi vào `messages` của LLM giúp tiết kiệm hàng nghìn prompt tokens và tránh làm nhiễu sự chú ý của model.
+  - **Kiểm chứng đa nguồn (`B6`, `B8`):** Nâng cấp Evidence Gate kiểm tra tất cả URL trong `observed_incident_urls` (`missing_urls = [u for u in observed_incident_urls if u not in answer]`), đảm bảo khi đối chiếu 2 incident khác nhau thì câu trả lời cuối luôn dẫn đủ cả 2 URL.
+- **Giới hạn còn lại của phần Bonus:**
+  - Bộ lọc thu gọn trường `distractors` dựa trên tên khóa `distractors` trong dict trả về; nếu dữ liệu nhiễu nằm trực tiếp chung mảng `incidents` thật thì model vẫn cần tự phân loại theo tên component và nội dung câu hỏi.
